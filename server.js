@@ -18,13 +18,23 @@ function resolvePort(rawPort) {
   return null;
 }
 
+const ORIGIN_FORM = /^\/(?![/\\])/;
+const ABSOLUTE_FORM = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
+
 function getPathname(req) {
   try {
     // Matching compares this parsed pathname rather than req.url, because the raw request
     // target carries the query string: '/hello?x=1' would fail an exact string comparison
     // against '/hello' and be answered with a 404 even though the path matches. A target
     // that cannot be parsed returns null from the catch, so it takes the ordinary 404 and
-    // the request line reports the raw target in place of a pathname.
+    // the request line reports the raw target in place of a pathname. The form guard below
+    // parses only a target that carries its own path: '//host/hello' and '/\host/hello' start
+    // an authority as far as the parse is concerned, so the pathname it would return is the
+    // base host's rather than the client's, and such a target takes the ordinary 404 instead.
+    if (typeof req.url !== 'string' || !(ORIGIN_FORM.test(req.url) || ABSOLUTE_FORM.test(req.url))) {
+      return null;
+    }
+
     return new URL(req.url, 'http://localhost').pathname;
   } catch {
     return null;
@@ -75,6 +85,32 @@ function handleRequest(req, res) {
 
   logRequest(req, pathname);
   router(req, res, pathname);
+}
+
+function handleConnect(req, socket) {
+  // Node never delivers a CONNECT request to the request listener: it emits 'connect' with the
+  // tunnelled socket instead, and with no listener the connection is destroyed and the method
+  // receives no response at all. Answering the catch-all from this event is what keeps the 404
+  // contract true for every method; the socket carries no ServerResponse, so the response is
+  // written to it directly and closed, with no internal detail and nothing request-derived.
+  logRequest(req, getPathname(req));
+
+  // Node hands this socket over with its own error listener already detached, so a client that
+  // has gone away would otherwise turn the write below into an uncaught 'error' event that ends
+  // the process. There is nothing to report on a connection that is already closed, and the
+  // four log points the product defines are the only lines it writes, so the failure is
+  // absorbed and the socket torn down.
+  socket.on('error', () => socket.destroy());
+
+  socket.end(
+    'HTTP/1.1 404 Not Found\r\n' +
+      'Content-Type: text/plain\r\n' +
+      `Date: ${new Date().toUTCString()}\r\n` +
+      'Connection: close\r\n' +
+      'Content-Length: 9\r\n' +
+      '\r\n' +
+      'Not Found'
+  );
 }
 
 function handleServerError(err) {
@@ -135,6 +171,8 @@ function start() {
   server.on('listening', () => {
     console.log(`Server listening on port ${port}`);
   });
+
+  server.on('connect', handleConnect);
 
   server.listen(port);
 
