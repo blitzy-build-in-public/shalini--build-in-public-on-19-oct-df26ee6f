@@ -11,8 +11,12 @@ function resolvePort(rawPort) {
     return port;
   }
 
+  // The value is rendered through JSON.stringify rather than interpolated raw: JSON.stringify
+  // supplies the surrounding quotes and escapes control characters, so a newline in the
+  // environment value cannot end this one-line message and continue it on a second line that
+  // reads as the startup line or a request line, while the rejected value stays visible.
   console.error(
-    `Invalid PORT value "${rawPort}": PORT must be an integer between 1024 and 65535. Example: PORT=8080 node server.js`
+    `Invalid PORT value ${JSON.stringify(rawPort)}: PORT must be an integer between 1024 and 65535. Example: PORT=8080 node server.js`
   );
   process.exitCode = 1;
   return null;
@@ -115,8 +119,17 @@ function handleConnect(req, socket) {
 
 function handleServerError(err) {
   if (err.code === 'EADDRINUSE') {
+    // The suggested alternative must itself be a value resolvePort accepts (1024-65535), so
+    // the next port is named only where it falls inside that range: at 65535 the advice would
+    // be 65536, which this same program rejects. err.port is absent when the error arrives
+    // without a bind attempt, so the port token falls back to the configured port and then to
+    // the default rather than being printed as 'undefined' with a 'NaN' remedy.
+    const busyPort = Number.isInteger(err.port) ? err.port : (Number(process.env.PORT) || 3000);
+    const remedy = Number.isInteger(busyPort) && busyPort >= 1024 && busyPort < 65535
+      ? `PORT=${busyPort + 1} node server.js`
+      : 'any unused port in the 1024-65535 range';
     console.error(
-      `Port ${err.port} is already in use. Stop the process using it, or start the server on an unused port: PORT=${err.port + 1} node server.js`
+      `Port ${busyPort} is already in use. Stop the process using it, or start the server on an unused port: ${remedy}`
     );
   } else {
     console.error(`Fatal server error (${err.code ?? 'UNKNOWN'}): ${err.message}`);

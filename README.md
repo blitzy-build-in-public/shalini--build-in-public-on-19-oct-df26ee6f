@@ -200,7 +200,7 @@ $ echo $?
 1
 ```
 
-The message quotes the value as it was supplied, so `PORT=80` produces `Invalid PORT value "80": ...`. It is written to stderr, while the startup, request and shutdown lines go to stdout. `80`, `0`, `65536`, `abc`, `80.5`, `3000.5`, `-3000`, `0x1F90`, `3e3`, `3000abc` and `+3000` are all rejected with that same message whatever the reason, and no startup line is logged.
+The message quotes the value as it was supplied, so `PORT=80` produces `Invalid PORT value "80": ...`. Control characters in the value — a newline above all — are shown escaped (`\n`, `\r`, `\t`), so the message stays on one line while still showing the value that was rejected. It is written to stderr, while the startup, request and shutdown lines go to stdout. `80`, `0`, `65536`, `abc`, `80.5`, `3000.5`, `-3000`, `0x1F90`, `3e3`, `3000abc` and `+3000` are all rejected with that same message whatever the reason, and no startup line is logged.
 
 Ports `1`–`1023` are privileged on Unix-like systems, which is the reason for the `1024` floor: a privileged port is refused rather than bound, and because the value is validated before the server is created, no bind is ever attempted for one.
 
@@ -213,4 +213,9 @@ $ echo $?
 1
 ```
 
-The message names the port that failed and the next one as the suggested alternative, so an instance started on 8080 reports `Port 8080 is already in use.` and suggests `PORT=8081 node server.js`.
+The message names the port that failed and the next one as the suggested alternative, so an instance started on 8080 reports `Port 8080 is already in use.` and suggests `PORT=8081 node server.js`. `65535` is the highest port the server accepts, so when that port is the one held there is no next port to name and the message advises any unused port in the `1024`–`65535` range instead of a `65536` it would reject:
+
+```console
+$ PORT=65535 node server.js
+Port 65535 is already in use. Stop the process using it, or start the server on an unused port: any unused port in the 1024-65535 range
+```
