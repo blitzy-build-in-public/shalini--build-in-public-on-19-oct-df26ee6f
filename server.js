@@ -32,9 +32,11 @@ function getPathname(req) {
     // against '/hello' and be answered with a 404 even though the path matches. A target
     // that cannot be parsed returns null from the catch, so it takes the ordinary 404 and
     // the request line reports the raw target in place of a pathname. The form guard below
-    // parses only a target that carries its own path: '//host/hello' and '/\host/hello' start
-    // an authority as far as the parse is concerned, so the pathname it would return is the
-    // base host's rather than the client's, and such a target takes the ordinary 404 instead.
+    // admits only an origin-form or absolute-form target, because the parse adopts the
+    // authority the target itself names: '//host/hello' and '/\host/hello' would otherwise be
+    // matched against this route table as a path addressed to another host. A target the guard
+    // rejects takes the ordinary 404; only one carrying no path at all, '//hello', resolves to
+    // the base's '/'.
     if (typeof req.url !== 'string' || !(ORIGIN_FORM.test(req.url) || ABSOLUTE_FORM.test(req.url))) {
       return null;
     }
@@ -68,8 +70,10 @@ function handleHello(res) {
   sendText(res, 200, 'Hello world');
 }
 
+const NOT_FOUND_BODY = 'Not Found';
+
 function sendNotFound(res) {
-  sendText(res, 404, 'Not Found');
+  sendText(res, 404, NOT_FOUND_BODY);
 }
 
 function sendText(res, statusCode, body) {
@@ -97,6 +101,8 @@ function handleConnect(req, socket) {
   // receives no response at all. Answering the catch-all from this event is what keeps the 404
   // contract true for every method; the socket carries no ServerResponse, so the response is
   // written to it directly and closed, with no internal detail and nothing request-derived.
+  // The destroy runs in end()'s completion callback so the socket is released as soon as the
+  // bytes are handed to the kernel, not left to the socket's allowHalfOpen default or a timer.
   logRequest(req, getPathname(req));
 
   // Node hands this socket over with its own error listener already detached, so a client that
@@ -111,9 +117,10 @@ function handleConnect(req, socket) {
       'Content-Type: text/plain\r\n' +
       `Date: ${new Date().toUTCString()}\r\n` +
       'Connection: close\r\n' +
-      'Content-Length: 9\r\n' +
+      `Content-Length: ${Buffer.byteLength(NOT_FOUND_BODY)}\r\n` +
       '\r\n' +
-      'Not Found'
+      NOT_FOUND_BODY,
+    () => socket.destroy()
   );
 }
 
