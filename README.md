@@ -160,6 +160,8 @@ The shutdown stops accepting new connections and lets requests already in flight
 
 An idle keep-alive connection is closed as part of the shutdown so the exit is immediate. `server.closeIdleConnections()` exists from Node.js 18.2.0 only, so the server calls it behind a capability check: on Node.js 18.0.0 and 18.1.0 an idle connection can defer the exit by up to five seconds — the default `keepAliveTimeout` — after which Node.js destroys the socket.
 
+A request that has begun counts as one in flight, so the shutdown waits for it, and a connection that is open but not idle — one whose request has started and not finished, for example a client that sends the beginning of its request headers and then stops — is not closed by the call above, which takes only idle connections. In that case the process stays alive after `Received SIGINT, shutting down`, and `Server closed` and the exit with status `0` follow only once that connection ends: Node.js's default `headersTimeout` (60 seconds) and `requestTimeout` (300 seconds) do not end the wait, and because a further CTRL+C is ignored, a client that never finishes its request leaves the process to be terminated, for example with `kill -KILL $(lsof -ti :3000)`, which ends every local process holding the port.
+
 To send the signal from another terminal or from a script instead of pressing CTRL+C:
 
 ```bash
