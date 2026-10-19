@@ -168,7 +168,7 @@ To send the signal from another terminal or from a script instead of pressing CT
 kill -INT "$(lsof -ti :3000 -sTCP:LISTEN)"
 ```
 
-The `-sTCP:LISTEN` filter narrows the selection to this server's own listening socket, so a process merely connected to port `3000` — a client — is not signalled. If the server was started as a background job in the shell you are using, that job's PID is `$!`, and `kill -INT "$!"` sends the same signal to that known process instead.
+The `-sTCP:LISTEN` filter narrows the selection to this server's own listening socket, so a process merely connected to port `3000` — a client — is not signalled. If the server itself is a background job of the shell you are using — started as `node server.js &` — its PID is `$!`, and `kill -INT "$!"` sends the same signal to that known process instead. Under `npm start &` the background job is npm rather than the server and npm does not forward the signal to the child it runs, so `$!` does not reach the server there: the `lsof` command above does, whichever entry point started it.
 
 ## Configuration
 
