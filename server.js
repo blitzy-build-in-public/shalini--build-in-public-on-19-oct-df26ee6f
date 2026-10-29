@@ -35,8 +35,8 @@ function getPathname(req) {
     // admits only an origin-form or absolute-form target, because the parse adopts the
     // authority the target itself names: '//host/hello' and '/\host/hello' would otherwise be
     // matched against this route table as a path addressed to another host. A target the guard
-    // rejects takes the ordinary 404; only one carrying no path at all, '//hello', resolves to
-    // the base's '/'.
+    // rejects takes the ordinary 404, including '//hello': it names no path of its own, and
+    // without the guard its parse would yield the base's '/'.
     if (typeof req.url !== 'string' || !(ORIGIN_FORM.test(req.url) || ABSOLUTE_FORM.test(req.url))) {
       return null;
     }
