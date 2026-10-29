@@ -12,8 +12,10 @@ const READY_TIMEOUT_MS = 10000;
 const STOP_TIMEOUT_MS = 5000;
 const RELEASE_TIMEOUT_MS = 3000;
 const RELEASE_RETRY_MS = 50;
+const REQUEST_TIMEOUT_MS = 5000;
 
 let server;
+let liveChild = null;
 
 function discoverFreePort() {
   return new Promise((resolve, reject) => {
@@ -55,9 +57,15 @@ function startOnce(port) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    // The child is tracked from the moment it is spawned rather than from readiness, because the
+    // paths that end this process before its stop hook runs leave no other handle on it.
+    liveChild = child;
+
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let exitCode = null;
+    let exitSignal = null;
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -101,14 +109,28 @@ function startOnce(port) {
     child.once('error', (error) => finish(error));
 
     // A start that fails carries its exit code and both streams, because the caller retries on
-    // a lost free port and has to tell that failure from any other.
+    // a lost free port and has to tell that failure from any other. 'exit' only reports that the
+    // process ended - its stdio may still be open - so the fate is recorded there and the error
+    // is built on 'close', once every buffered chunk has arrived: an undrained stderr would read
+    // as a failure of another kind and turn a lost free port into a hard abort.
     child.once('exit', (code, signal) => {
+      exitCode = code;
+      exitSignal = signal;
+    });
+
+    child.once('close', () => {
+      // Cleared by this child's own 'close' and never by an earlier one: a retry attempt has
+      // already tracked its own child by the time the attempt it replaces closes.
+      if (liveChild === child) {
+        liveChild = null;
+      }
+
       const error = new Error(
-        `The server exited before reporting readiness on port ${port} (code ${code}, signal ${signal})`
+        `The server exited before reporting readiness on port ${port} (code ${exitCode}, signal ${exitSignal})`
       );
 
-      error.exitCode = code;
-      error.signal = signal;
+      error.exitCode = exitCode;
+      error.signal = exitSignal;
       error.stdout = stdout;
       error.stderr = stderr;
 
@@ -158,23 +180,114 @@ function request(port, target, method = 'GET') {
       });
     });
 
+    // node:test applies no default timeout, so a server that never answers would hang the run here.
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`No response to ${method} ${target} on port ${port} within ${REQUEST_TIMEOUT_MS} ms`));
+    });
+
     req.on('error', reject);
     req.end();
   });
 }
 
 function stopServer(child) {
-  return new Promise((resolve) => {
-    const killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_TIMEOUT_MS);
+  return new Promise((resolve, reject) => {
+    let settled = false;
 
-    child.once('exit', (code, signal) => {
-      clearTimeout(killTimer);
-      resolve({ code, signal });
-    });
+    function finish(error, fate) {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(stopTimer);
+
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(fate);
+    }
+
+    // The stop settles on 'close' rather than 'exit': 'exit' only reports that the process ended,
+    // while the hook that awaits this asserts on the child's stdout and stderr, which 'close'
+    // follows once every buffered chunk has been handed over. A child that outlives its own exit
+    // through an inherited pipe, or one killed outright, is what makes the difference visible.
+    const stopTimer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(new Error(`The server did not exit within ${STOP_TIMEOUT_MS} ms of the SIGINT request`));
+    }, STOP_TIMEOUT_MS);
+
+    child.once('close', (code, signal) => finish(null, { code, signal }));
+
+    // A child that died before the hook ran - a crash during a case, which this suite exists to
+    // catch - emits no further event and ignores the signal, so its recorded fate is settled with
+    // here; the streams must have ended first, because that is the only proof its output can no
+    // longer arrive, and until then 'close' is still to come.
+    if (
+      (child.exitCode !== null || child.signalCode !== null) &&
+      child.stdout.readableEnded &&
+      child.stderr.readableEnded
+    ) {
+      finish(null, { code: child.exitCode, signal: child.signalCode });
+      return;
+    }
 
     child.kill('SIGINT');
   });
 }
+
+// The stop hook is not the only way out of this process: a closed stdout pipe, a signal aimed at
+// the run or an uncaught exception ends it before that hook runs, and the tracked child would
+// survive as an orphan holding its port. So it is reaped from the last two points that can still
+// act - the trappable signals, and 'exit', which every other way out reaches.
+function reapLiveChild() {
+  const child = liveChild;
+
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+
+  liveChild = null;
+
+  // SIGKILL, because this process is already terminating, nothing will read the child's shutdown
+  // lines, and it is the one signal the server cannot defer, so its port is released at once.
+  try {
+    child.kill('SIGKILL');
+  } catch (error) {
+    // An exit hook that threw would replace the failure that ended the run, and there is nowhere
+    // left to report one.
+  }
+}
+
+function endBySignal(signal, handler) {
+  reapLiveChild();
+
+  // Re-raised with this listener removed, so the default action ends the run exactly as it would
+  // have without the handler, by the signal it received rather than with an invented status.
+  process.removeListener(signal, handler);
+  process.kill(process.pid, signal);
+}
+
+function onSigint() {
+  endBySignal('SIGINT', onSigint);
+}
+
+function onSigterm() {
+  endBySignal('SIGTERM', onSigterm);
+}
+
+// Both pipes can be closed while this process is still running - the runner's reader is gone -
+// and an unhandled EPIPE then ends the run through the harness's fatal path, which runs no 'exit'
+// hook and leaves the child behind. Absorbing it lets the run reach its stop hook, which reaps
+// the child; there is no reader for anything written to a closed pipe anyway.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+
+process.on('SIGINT', onSigint);
+process.on('SIGTERM', onSigterm);
+process.on('exit', reapLiveChild);
 
 async function assertPortReleased(port) {
   const deadline = Date.now() + RELEASE_TIMEOUT_MS;
