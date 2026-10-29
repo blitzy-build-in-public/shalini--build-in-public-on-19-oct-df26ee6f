@@ -110,7 +110,7 @@ function startOnce(port) {
 
     // A start that fails carries its exit code and both streams, because the caller retries on
     // a lost free port and has to tell that failure from any other. 'exit' only reports that the
-    // process ended - its stdio may still be open - so the fate is recorded there and the error
+    // process ended — its stdio may still be open — so the fate is recorded there and the error
     // is built on 'close', once every buffered chunk has arrived: an undrained stderr would read
     // as a failure of another kind and turn a lost free port into a hard abort.
     child.once('exit', (code, signal) => {
@@ -119,8 +119,8 @@ function startOnce(port) {
     });
 
     child.once('close', () => {
-      // Cleared by this child's own 'close' and never by an earlier one: a retry attempt has
-      // already tracked its own child by the time the attempt it replaces closes.
+      // Cleared by this child's own 'close' and never by another: the guard keeps the slot
+      // holding the most recently spawned child, so a stale 'close' cannot empty the live handle.
       if (liveChild === child) {
         liveChild = null;
       }
@@ -221,9 +221,9 @@ function stopServer(child) {
 
     child.once('close', (code, signal) => finish(null, { code, signal }));
 
-    // A child that died before the hook ran - a crash during a case, which this suite exists to
-    // catch - emits no further event and ignores the signal, so its recorded fate is settled with
-    // here; the streams must have ended first, because that is the only proof its output can no
+    // A child that died before this hook ran — a crash during a case, which is what this suite
+    // exists to catch — ignores the signal and is already gone, so its fate is settled here;
+    // the streams must have ended first, because their end is the only proof its output can no
     // longer arrive, and until then 'close' is still to come.
     if (
       (child.exitCode !== null || child.signalCode !== null) &&
@@ -241,7 +241,7 @@ function stopServer(child) {
 // The stop hook is not the only way out of this process: a closed stdout pipe, a signal aimed at
 // the run or an uncaught exception ends it before that hook runs, and the tracked child would
 // survive as an orphan holding its port. So it is reaped from the last two points that can still
-// act - the trappable signals, and 'exit', which every other way out reaches.
+// act — the trappable signals, and 'exit', which every other way out reaches.
 function reapLiveChild() {
   const child = liveChild;
 
@@ -278,10 +278,11 @@ function onSigterm() {
   endBySignal('SIGTERM', onSigterm);
 }
 
-// Both pipes can be closed while this process is still running - the runner's reader is gone -
-// and an unhandled EPIPE then ends the run through the harness's fatal path, which runs no 'exit'
-// hook and leaves the child behind. Absorbing it lets the run reach its stop hook, which reaps
-// the child; there is no reader for anything written to a closed pipe anyway.
+// Both pipes can be closed while this process is still running — the runner's reader is gone —
+// and an unhandled stream 'error' would then surface as an uncaught exception, ending the run on
+// an EPIPE stack in place of its real result. Absorbing it lets the run reach its stop hook,
+// which stops the child and reports what happened; there is no reader for anything written to a
+// closed pipe anyway.
 process.stdout.on('error', () => {});
 process.stderr.on('error', () => {});
 
