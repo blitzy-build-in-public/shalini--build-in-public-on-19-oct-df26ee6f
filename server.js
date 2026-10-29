@@ -35,8 +35,8 @@ function getPathname(req) {
     // admits only an origin-form or absolute-form target, because the parse adopts the
     // authority the target itself names: '//host/hello' and '/\host/hello' would otherwise be
     // matched against this route table as a path addressed to another host. A target the guard
-    // rejects takes the ordinary 404; only one carrying no path at all, '//hello', resolves to
-    // the base's '/'.
+    // rejects takes the ordinary 404, including '//hello': it names no path of its own, and
+    // without the guard its parse would yield the base's '/'.
     if (typeof req.url !== 'string' || !(ORIGIN_FORM.test(req.url) || ABSOLUTE_FORM.test(req.url))) {
       return null;
     }
@@ -53,6 +53,7 @@ function logRequest(req, pathname) {
 
 const ROUTES = {
   'GET /hello': handleHello,
+  'GET /good-evening': handleGoodEvening,
 };
 
 function router(req, res, pathname) {
@@ -70,6 +71,10 @@ function handleHello(res) {
   sendText(res, 200, 'Hello world');
 }
 
+function handleGoodEvening(res) {
+  sendText(res, 200, 'Good evening');
+}
+
 const NOT_FOUND_BODY = 'Not Found';
 
 function sendNotFound(res) {
@@ -82,7 +87,7 @@ function sendText(res, statusCode, body) {
   // Content-Length. Assigning the status and setting the header instead leaves them
   // implicit, so res.end(body) lets Node generate Content-Length from the byte length
   // (11 bytes for 'Hello world', 9 for 'Not Found') and add Date, Connection and Keep-Alive.
-  // Both handlers write through here, so status, header and framing cannot diverge.
+  // Every handler writes through here, so status, header and framing cannot diverge.
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'text/plain');
   res.end(body);

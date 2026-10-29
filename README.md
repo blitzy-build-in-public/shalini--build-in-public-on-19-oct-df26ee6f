@@ -2,13 +2,14 @@
 
 ## Purpose
 
-A minimal, dependency-free Node.js HTTP server, written as a teaching reference: the entire application is one file, `server.js`, and it can be read from top to bottom in a few minutes. It answers a single endpoint — `GET /hello` returns `200 OK` with the plain-text body `Hello world` — and answers every other request with `404 Not Found`.
+A minimal, dependency-free Node.js HTTP server, written as a teaching reference: the entire application is one file, `server.js`, and it can be read from top to bottom in a few minutes. It answers two endpoints — `GET /hello` returns `200 OK` with the plain-text body `Hello world`, and `GET /good-evening` returns `200 OK` with the plain-text body `Good evening` — and answers every other request with `404 Not Found`.
 
 The server is built directly on the `http` module. There is no framework (Express, Fastify, Koa), no middleware library and no routing library, and `node:http` is the only module the program requires — because the absence of a framework is what this project is meant to show: how the server is created and bound, how a request is matched to a handler, how a status code, header and body are written, and how the process starts and stops cleanly.
 
 | Method | Path | Status | Content-Type | Body |
 |--------|------|--------|--------------|------|
 | `GET` | `/hello` | `200` | `text/plain` | `Hello world` |
+| `GET` | `/good-evening` | `200` | `text/plain` | `Good evening` |
 | Any other method or path | catch-all | `404` | `text/plain` | `Not Found` |
 
 The method is part of the route key, so a request such as `POST /hello` does not match the `/hello` route and receives the 404 response.
@@ -61,13 +62,19 @@ The server listens on port `3000` by default and binds the unspecified address, 
 
 ## Verifying the server
 
-With the server running, issue requests with `curl`. There is no test suite to run: the project installs no test framework, so every check is made directly against the running server. The port in the commands below is the default; substitute the port you configured if you changed it.
+With the server running, issue requests with `curl`. The same contract is covered by `test/good-evening.test.js`, which `npm test` runs on Node's built-in test runner (`node --test test/good-evening.test.js`); the suite needs Node.js 18.8.0 or newer and installs nothing, asserting through the built-in `node:test` and `node:assert` modules. The `curl` commands below remain the way to check a running server by hand. The port in the commands below is the default; substitute the port you configured if you changed it.
 
 ```bash
 curl http://localhost:3000/hello
 ```
 
 Prints `Hello world`, the response to a matched route.
+
+```bash
+curl -i http://localhost:3000/good-evening
+```
+
+Prints `Good evening`, the response to the second matched route.
 
 ```bash
 curl -i http://localhost:3000/hello
@@ -103,7 +110,7 @@ Returns `404 Not Found`. The trailing slash makes this a different pathname than
 curl -i http://localhost:3000/
 ```
 
-Returns `404 Not Found`, as does any other method and path that is not `GET /hello`.
+Returns `404 Not Found`, as does any other method and path that is neither `GET /hello` nor `GET /good-evening`.
 
 ## Expected output
 
@@ -121,6 +128,20 @@ Content-Length: 11
 Hello world
 ```
 
+A request that matches `GET /good-evening`:
+
+```console
+$ curl -i http://localhost:3000/good-evening
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Date: Mon, 19 Oct 2026 06:12:03 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Content-Length: 12
+
+Good evening
+```
+
 A request that matches nothing:
 
 ```console
@@ -135,7 +156,7 @@ Content-Length: 9
 Not Found
 ```
 
-The bodies are fixed: `Hello world` is 11 bytes and `Not Found` is 9, which is the `Content-Length` reported in each case. `Content-Type` is exactly `text/plain`, with no charset parameter — both bodies are plain ASCII, so none is needed. `Date`, `Connection` and `Keep-Alive` are added by Node.js; the `Date` value is the time of the response, not the fixed value shown here. No `Transfer-Encoding` header ever appears: the server sets the status and `Content-Type` and leaves the rest implicit, so Node.js generates `Content-Length` from the body and the response is always framed as a fixed length. A `HEAD` request receives the status line, `Content-Type`, `Date`, `Connection` and `Keep-Alive` with no body and no `Content-Length`, because Node.js suppresses both for a response to `HEAD`.
+The bodies are fixed: `Hello world` is 11 bytes, `Good evening` is 12 and `Not Found` is 9, which is the `Content-Length` reported in each case. `Content-Type` is exactly `text/plain`, with no charset parameter — all three bodies are plain ASCII, so none is needed. `Date`, `Connection` and `Keep-Alive` are added by Node.js; the `Date` value is the time of the response, not the fixed value shown here. No `Transfer-Encoding` header ever appears: the server sets the status and `Content-Type` and leaves the rest implicit, so Node.js generates `Content-Length` from the body and an HTTP/1.1 response is always framed as a fixed length. An HTTP/1.0 request is framed by the connection instead: it receives `Connection: close` and neither `Content-Length` nor `Keep-Alive`, and the body is delimited by the close. A `HEAD` request receives the status line, `Content-Type`, `Date`, `Connection` and `Keep-Alive` with no body and no `Content-Length`, because Node.js suppresses both for a response to `HEAD`.
 
 Every request is logged to the console before it is routed, so matched and unmatched requests alike produce one line — in the format `[ISO-8601 timestamp] [HTTP method] [request path]`:
 
